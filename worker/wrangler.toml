@@ -1,0 +1,47 @@
+name = "learner"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+
+# --- Deploy (first time & updates) ---
+#
+# Prereqs: Node 20+, Cloudflare account, `npm i` in repo root (or in worker/ + web/).
+#
+# 1) Log in:        cd worker && npx wrangler login
+# 2) Create D1:      npx wrangler d1 create learner
+#    Copy the generated `database_id` into [[d1_databases]] below (replace local-only).
+# 3) Apply schema:   npm run db:apply:remote
+#    Re-run after pulling new migration files.
+# 4) Ship:          cd .. && npm run deploy
+#    (builds web → web/dist, then uploads worker + static assets from that folder.)
+#
+# URL: Workers & Pages dashboard → learner → Triggers, or `*.workers.dev` after deploy.
+# Optional: Workers → Settings → Domains → add your zone. For Cloudflare Access, use that hostname.
+
+# --- Cloudflare Access (Zero Trust) — “access only” auth ---
+#
+# 1. Zero Trust → Access → Applications → Add an application → Self-hosted.
+# 2. Session duration: as you prefer. Add a policy (e.g. emails ending in @yourdomain.com).
+# 3. Application domain: the public URL of this worker (custom domain or *.workers.dev).
+# 4. Copy the Application Audience (AUD) tag from the app’s settings.
+# 5. Team domain: Settings → Custom pages (or your Zero Trust URL) — hostname like
+#    `yourorg.cloudflareaccess.com` (same as JWT “iss” without https://).
+#
+# Set the two vars below (uncomment) for defense in depth: the worker verifies
+# `Cf-Access-Jwt-Assertion` on every request. If you omit them, verification is
+# skipped (useful for `wrangler dev`). You should still add the Access application
+# so users must log in before Cloudflare forwards traffic to the worker.
+#
+# [vars]
+# ACCESS_AUD = "paste-aud-tag-from-access-dashboard"
+# ACCESS_TEAM_DOMAIN = "yourorg.cloudflareaccess.com"
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "learner"
+# Replace with output of: npx wrangler d1 create learner
+database_id = "local-only"
