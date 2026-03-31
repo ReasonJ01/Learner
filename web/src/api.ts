@@ -14,6 +14,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type StudyCard = {
   id: string
+  /** Folder this card belongs to (raw id). */
+  folderId: string
   cardKind: string
   front: string | null
   back: string | null

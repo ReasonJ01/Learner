@@ -236,6 +236,37 @@ function StudyCardMetaLine({ card }: { card: StudyCard }) {
   return <span className="muted" style={{ fontSize: '0.78rem' }}>{m}</span>
 }
 
+function useFolderPathById() {
+  const foldersQuery = useQuery({
+    queryKey: foldersQueryKey,
+    queryFn: async () => (await api.folders()).folders as Folder[],
+  })
+  const folders = foldersQuery.data ?? []
+
+  return useMemo(() => {
+    const byId = new Map(folders.map((f) => [f.id, f]))
+    const pathCache = new Map<string, string>()
+
+    const pathFor = (id: string | null): string => {
+      if (!id) return ''
+      const cached = pathCache.get(id)
+      if (cached != null) return cached
+      const f = byId.get(id)
+      if (!f) return id
+      if (f.parent_id == null) {
+        pathCache.set(id, f.name)
+        return f.name
+      }
+      const parent = pathFor(f.parent_id)
+      const val = parent ? `${parent}/${f.name}` : f.name
+      pathCache.set(id, val)
+      return val
+    }
+
+    return (id: string) => pathFor(id)
+  }, [folders])
+}
+
 function shuffleOptions<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -358,6 +389,7 @@ function StudyPage() {
   /** Bumped whenever the due-queue is (re)fetched so MCQ option order reshuffles even for the same card. */
   const [mcqShuffleKey, setMcqShuffleKey] = useState(0)
   const [nextAvailableAt, setNextAvailableAt] = useState<number | null>(null)
+  const folderPathForId = useFolderPathById()
 
   const load = useCallback(
     (mode: 'normal' | 'ahead' = 'normal', opts?: { force?: boolean }) => {
@@ -548,6 +580,12 @@ function StudyPage() {
                       : card.cardKind}
               </Badge>
               <StudyCardMetaLine card={card} />
+              <span className="muted" style={{ fontSize: '0.78rem' }}>
+                Folder:{' '}
+                <span className="text-foreground">
+                  {folderPathForId(card.folderId)}
+                </span>
+              </span>
             </div>
           </div>
           {(card.cardKind === 'flashcard' || card.cardKind === 'sequence') && (
