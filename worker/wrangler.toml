@@ -31,9 +31,9 @@ compatibility_date = "2025-03-01"
 # skipped (useful for `wrangler dev`). You should still add the Access application
 # so users must log in before Cloudflare forwards traffic to the worker.
 #
-# [vars]
-# ACCESS_AUD = "paste-aud-tag-from-access-dashboard"
-# ACCESS_TEAM_DOMAIN = "yourorg.cloudflareaccess.com"
+[vars]
+ACCESS_AUD = "f57ffcafe12d8ed71c7a28ecb428e8e0855bdd27ad9dfebd27f2ecdfa3e8ade9"
+ACCESS_TEAM_DOMAIN = "reasonplace.cloudflareaccess.com"
 
 [assets]
 directory = "../web/dist"
@@ -44,4 +44,4 @@ not_found_handling = "single-page-application"
 binding = "DB"
 database_name = "learner"
 # Replace with output of: npx wrangler d1 create learner
-database_id = "local-only"
+database_id = "d21be4ed-5103-455a-9387-e6efca27f614"

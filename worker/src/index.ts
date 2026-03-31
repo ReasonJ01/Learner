@@ -200,6 +200,47 @@ async function createSequenceInFolder(
   return { itemId: iid, cardIds }
 }
 
+/** Replace all sequence cards for an item (FSRS state reset to new). */
+async function replaceSequenceCards(
+  db: D1Database,
+  itemId: string,
+  folderId: string,
+  title: string,
+  events: string[],
+  now: number,
+): Promise<void> {
+  await db.prepare("DELETE FROM cards WHERE item_id = ?").bind(itemId).run()
+  for (let i = 0; i < events.length - 1; i++) {
+    const { front, back } = sequenceCardText(title, events[i], events[i + 1])
+    const empty = createEmptyCard(new Date(now))
+    const cid = crypto.randomUUID()
+    await db
+      .prepare(
+        "INSERT INTO cards (id, item_id, folder_id, card_kind, front, back, mcq_json, due, stability, difficulty, elapsed_days, scheduled_days, learning_steps, reps, lapses, state, last_review, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .bind(
+        cid,
+        itemId,
+        folderId,
+        "sequence",
+        front,
+        back,
+        empty.due.getTime(),
+        empty.stability,
+        empty.difficulty,
+        empty.elapsed_days,
+        empty.scheduled_days,
+        empty.learning_steps,
+        empty.reps,
+        empty.lapses,
+        empty.state,
+        empty.last_review ? empty.last_review.getTime() : null,
+        now,
+      )
+      .run()
+  }
+}
+
 async function ensureFolderPath(
   db: D1Database,
   segments: string[],
@@ -277,6 +318,16 @@ api.patch("/settings", async (c) => {
   return c.json({ ok: true })
 })
 
+api.get("/items/:itemId", async (c) => {
+  const itemId = c.req.param("itemId")
+  const row = await c.env.DB
+    .prepare("SELECT id, kind, folder_id, title, content_json, created_at, updated_at FROM items WHERE id = ?")
+    .bind(itemId)
+    .first<{ id: string; kind: string; folder_id: string; title: string | null; content_json: string; created_at: number; updated_at: number }>()
+  if (!row) return c.json({ error: "item not found" }, 404)
+  return c.json({ item: row })
+})
+
 api.get("/items", async (c) => {
   const folderId = c.req.query("folderId")
   if (!folderId) return c.json({ error: "folderId required" }, 400)
@@ -286,16 +337,139 @@ api.get("/items", async (c) => {
 
 api.get("/cards", async (c) => {
   const folderId = c.req.query("folderId")
-  let q = "SELECT c.*, i.kind as item_kind FROM cards c JOIN items i ON i.id = c.item_id"
+  const limitRaw = c.req.query("limit")
+  const offsetRaw = c.req.query("offset")
+  const paginate = limitRaw != null && limitRaw !== ""
+  const limit = paginate ? Math.min(Math.max(Math.trunc(Number(limitRaw)) || 30, 1), 100) : null
+  const offset = paginate ? Math.max(Math.trunc(Number(offsetRaw)) || 0, 0) : 0
+
+  const baseFrom = " FROM cards c JOIN items i ON i.id = c.item_id"
+  let whereClause = ""
   const binds: string[] = []
   if (folderId) {
-    q += " WHERE c.folder_id = ?"
+    whereClause = " WHERE c.folder_id = ?"
     binds.push(folderId)
   }
-  q += " ORDER BY c.due ASC"
-  const stmt = binds.length ? c.env.DB.prepare(q).bind(...binds) : c.env.DB.prepare(q)
-  const { results } = await stmt.all()
-  return c.json({ cards: results ?? [] })
+
+  let total: number
+  if (paginate) {
+    const countSql = `SELECT COUNT(*) as n${baseFrom}${whereClause}`
+    const countStmt = binds.length ? c.env.DB.prepare(countSql).bind(...binds) : c.env.DB.prepare(countSql)
+    const countRow = await countStmt.first<{ n: number }>()
+    total = Math.trunc(Number(countRow?.n ?? 0))
+  } else {
+    total = 0
+  }
+
+  const qBase = `SELECT c.*, i.kind as item_kind${baseFrom}${whereClause} ORDER BY c.due ASC`
+  const { results } =
+    paginate && limit != null
+      ? await (binds.length > 0
+          ? c.env.DB.prepare(`${qBase} LIMIT ? OFFSET ?`).bind(...binds, limit, offset)
+          : c.env.DB.prepare(`${qBase} LIMIT ? OFFSET ?`).bind(limit, offset)
+        ).all()
+      : await (binds.length > 0 ? c.env.DB.prepare(qBase).bind(...binds) : c.env.DB.prepare(qBase)).all()
+  const cards = results ?? []
+  if (!paginate) total = cards.length
+  return c.json(
+    paginate
+      ? { cards, total, limit, offset }
+      : { cards, total },
+  )
+})
+
+api.patch("/cards/:id", async (c) => {
+  const id = c.req.param("id")
+  const row = await c.env.DB
+    .prepare(
+      "SELECT c.id, c.item_id, c.folder_id, c.card_kind, i.kind as item_kind FROM cards c JOIN items i ON i.id = c.item_id WHERE c.id = ?",
+    )
+    .bind(id)
+    .first<{ id: string; item_id: string; folder_id: string; card_kind: string; item_kind: string }>()
+  if (!row) return c.json({ error: "card not found" }, 404)
+
+  if (row.card_kind === "sequence" || row.item_kind === "timeline") {
+    return c.json({ error: "use PATCH /api/items/:id to edit sequences" }, 400)
+  }
+
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+  if (!body || typeof body !== "object") return c.json({ error: "invalid json" }, 400)
+  const now = Date.now()
+
+  if (row.card_kind === "flashcard") {
+    const front = String(body.front ?? "").trim()
+    const back = String(body.back ?? "").trim()
+    if (!front || !back) return c.json({ error: "front and back required" }, 400)
+    const content = JSON.stringify({ question: front, answer: back })
+    await c.env.DB.prepare("UPDATE cards SET front = ?, back = ? WHERE id = ?").bind(front, back, id).run()
+    await c.env.DB.prepare("UPDATE items SET content_json = ?, updated_at = ? WHERE id = ?").bind(content, now, row.item_id).run()
+    return c.json({ ok: true })
+  }
+
+  if (row.card_kind === "mcq") {
+    const question = String(body.question ?? "").trim()
+    const correct = String(body.correct ?? "").trim()
+    const wrongRaw = body.wrong
+    const wrong = Array.isArray(wrongRaw) ? wrongRaw.map((w) => String(w ?? "").trim()).filter(Boolean) : []
+    const expl = body.explanation != null ? String(body.explanation).trim() : ""
+    const explanation = expl.length > 0 ? expl : null
+    if (!question || !correct || wrong.length < 1) return c.json({ error: "question, correct, and at least one wrong option required" }, 400)
+    const opts = [{ text: correct, correct: true }, ...wrong.map((t) => ({ text: t, correct: false }))]
+    const payload = { question, options: opts, explanation }
+    const mcqJson = JSON.stringify(payload)
+    const content = JSON.stringify(payload)
+    await c.env.DB.prepare("UPDATE cards SET mcq_json = ? WHERE id = ?").bind(mcqJson, id).run()
+    await c.env.DB.prepare("UPDATE items SET content_json = ?, updated_at = ? WHERE id = ?").bind(content, now, row.item_id).run()
+    return c.json({ ok: true })
+  }
+
+  return c.json({ error: "unsupported card kind" }, 400)
+})
+
+api.patch("/items/:id", async (c) => {
+  const itemId = c.req.param("id")
+  const item = await c.env.DB
+    .prepare("SELECT id, kind, folder_id, title, content_json FROM items WHERE id = ?")
+    .bind(itemId)
+    .first<{ id: string; kind: string; folder_id: string; title: string | null; content_json: string }>()
+  if (!item) return c.json({ error: "item not found" }, 404)
+  if (item.kind !== "timeline") return c.json({ error: "only timeline (sequence) items can be updated here" }, 400)
+
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+  if (!body || typeof body !== "object") return c.json({ error: "invalid json" }, 400)
+  const title = String(body.title ?? item.title ?? "Timeline").trim() || "Timeline"
+  let events: string[] = []
+  if (typeof body.eventsText === "string") {
+    events = body.eventsText.split(/\n/).map((l) => l.trim()).filter(Boolean)
+  }
+  if (events.length < 2) return c.json({ error: "at least two sequence steps required" }, 400)
+
+  const now = Date.now()
+  const content = JSON.stringify({ title, events })
+  await c.env.DB.prepare("UPDATE items SET title = ?, content_json = ?, updated_at = ? WHERE id = ?").bind(title, content, now, itemId).run()
+  await replaceSequenceCards(c.env.DB, itemId, item.folder_id, title, events, now)
+  return c.json({ ok: true })
+})
+
+api.delete("/items/:id", async (c) => {
+  const itemId = c.req.param("id")
+  const found = await c.env.DB.prepare("SELECT 1 as x FROM items WHERE id = ?").bind(itemId).first<{ x: number }>()
+  if (!found) return c.json({ error: "item not found" }, 404)
+  await c.env.DB.prepare("DELETE FROM items WHERE id = ?").bind(itemId).run()
+  return c.json({ ok: true })
+})
+
+api.delete("/cards/:id", async (c) => {
+  const id = c.req.param("id")
+  const row = await c.env.DB.prepare("SELECT id, item_id FROM cards WHERE id = ?").bind(id).first<{ id: string; item_id: string }>()
+  if (!row) return c.json({ error: "card not found" }, 404)
+  const countRow = await c.env.DB.prepare("SELECT COUNT(*) as n FROM cards WHERE item_id = ?").bind(row.item_id).first<{ n: number }>()
+  const n = Math.trunc(Number(countRow?.n ?? 0))
+  if (n > 1) {
+    return c.json({ error: "this card is part of a multi-card item — delete the whole item from the card row menu" }, 400)
+  }
+  await c.env.DB.prepare("DELETE FROM items WHERE id = ?").bind(row.item_id).run()
+  return c.json({ ok: true })
 })
 
 api.post("/import", async (c) => {
@@ -425,12 +599,22 @@ api.get("/study/due", async (c) => {
     aheadRows = (futureRows ?? []) as Record<string, unknown>[]
   }
 
+  const nextDueRow = await c.env.DB
+    .prepare(`SELECT MIN(c.due) as next_due FROM cards c WHERE c.due > ?${folderSql}`)
+    .bind(now, ...folderBinds)
+    .first<{ next_due: number | null }>()
+  const nextAvailableAt =
+    nextDueRow?.next_due != null && !Number.isNaN(Number(nextDueRow.next_due))
+      ? Math.trunc(Number(nextDueRow.next_due))
+      : null
+
   const out = [...nowRows.map(studyCardFromRow), ...aheadRows.map(studyCardFromRow)]
   return c.json({
     cards: out,
     dueCount,
     dueNowInQueue: nowRows.length,
     aheadInQueue: aheadRows.length,
+    nextAvailableAt,
   })
 })
 
