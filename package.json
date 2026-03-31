@@ -5,10 +5,12 @@
     "dev": "concurrently -n worker,web -c cyan,magenta \"npm run dev --prefix worker\" \"npm run dev --prefix web\"",
     "build": "npm install --prefix web && npm run build --prefix web",
     "db:apply:remote": "npm run db:apply:remote --prefix worker",
-    "deploy": "npm run build --prefix web && npm run deploy --prefix worker",
-    "db:local": "npm run db:local --prefix worker"
+    "deploy": "wrangler deploy",
+    "db:local": "npm run db:local --prefix worker",
+    "preview": "wrangler dev"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "wrangler": "^4.78.0"
   }
 }
