@@ -1252,6 +1252,7 @@ function ImportPage() {
   const [importBtn, setImportBtn] = useState<{ phase: BtnPhase; text?: string }>({ phase: 'idle' })
   const [copyBtn, setCopyBtn] = useState<{ phase: BtnPhase }>({ phase: 'idle' })
   const [errs, setErrs] = useState<{ line: number; message: string }[]>([])
+  const [importErrDetail, setImportErrDetail] = useState<string | null>(null)
   const importTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1280,9 +1281,11 @@ function ImportPage() {
     if (importTimer.current) clearTimeout(importTimer.current)
     setImportBtn({ phase: 'loading' })
     setErrs([])
+    setImportErrDetail(null)
     const res = await importContent(text, defaultFolder)
     if (!res.ok) {
       setImportBtn({ phase: 'error', text: shortErr(res.message, 48) })
+      setImportErrDetail(res.message)
       importTimer.current = setTimeout(() => setImportBtn({ phase: 'idle' }), 4500)
       return
     }
@@ -1364,6 +1367,11 @@ function ImportPage() {
       >
         {importLabel}
       </Button>
+      {importErrDetail ? (
+        <p className="mt-2 text-sm leading-snug text-destructive" style={{ whiteSpace: 'pre-wrap' }}>
+          {importErrDetail}
+        </p>
+      ) : null}
       {errs.length > 0 && (
         <ul className="mt-2 list-disc pl-4 text-sm text-destructive">
           {errs.map((e, i) => (

@@ -90,7 +90,16 @@ export async function importContent(text: string, defaultFolderId?: string): Pro
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, defaultFolderId }),
     })
-    const data = (await r.json()) as Partial<ImportResponseBody> & { error?: string }
+    const ct = r.headers.get('content-type') ?? ''
+    const data: (Partial<ImportResponseBody> & { error?: string }) | null = ct.includes('application/json')
+      ? ((await r.json()) as Partial<ImportResponseBody> & { error?: string })
+      : null
+    if (!data && !r.ok) {
+      const bodyText = await r.text().catch(() => '')
+      const fallback = bodyText.trim().slice(0, 240)
+      return { ok: false, message: `HTTP ${r.status}${fallback ? `: ${fallback}` : ''}` }
+    }
+    if (!data) return { ok: false, message: `HTTP ${r.status}: Unexpected non-JSON response` }
     const created = data.created ?? { items: 0, cards: 0 }
     const errors = data.errors ?? []
     return { ok: true, status: r.status, created, errors }
