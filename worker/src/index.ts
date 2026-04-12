@@ -14,6 +14,19 @@ export type Env = {
   ACCESS_TEAM_DOMAIN?: string
 }
 
+function parseOptionalImageUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const v = raw.trim()
+  if (!v) return null
+  try {
+    const u = new URL(v)
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null
+    return u.toString()
+  } catch {
+    return null
+  }
+}
+
 const f = fsrs({ enable_fuzz: true })
 
 function rowToCard(row: {
@@ -114,16 +127,17 @@ async function createFlashcardInFolder(
   folderId: string,
   question: string,
   answer: string,
+  imageUrl: string | null,
   now: number,
 ): Promise<{ itemId: string; cardIds: string[] }> {
   const iid = crypto.randomUUID()
-  const content = JSON.stringify({ question, answer })
+  const content = JSON.stringify({ question, answer, imageUrl })
   await db.prepare("INSERT INTO items (id, folder_id, kind, title, content_json, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?)").bind(iid, folderId, "flashcard", content, now, now).run()
   const empty = createEmptyCard(new Date(now))
   const cid = crypto.randomUUID()
   await db
     .prepare(
-      "INSERT INTO cards (id, item_id, folder_id, card_kind, front, back, mcq_json, due, stability, difficulty, elapsed_days, scheduled_days, learning_steps, reps, lapses, state, last_review, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO cards (id, item_id, folder_id, card_kind, front, back, image_url, mcq_json, due, stability, difficulty, elapsed_days, scheduled_days, learning_steps, reps, lapses, state, last_review, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(
       cid,
@@ -132,6 +146,7 @@ async function createFlashcardInFolder(
       "flashcard",
       question,
       answer,
+      imageUrl,
       empty.due.getTime(),
       empty.stability,
       empty.difficulty,
@@ -155,10 +170,11 @@ async function createMcqInFolder(
   correct: string,
   wrong: string[],
   explanation: string | null,
+  imageUrl: string | null,
   now: number,
 ): Promise<{ itemId: string; cardIds: string[] }> {
   const opts = [{ text: correct, correct: true }, ...wrong.map((t) => ({ text: t, correct: false }))]
-  const payload = { question, options: opts, explanation }
+  const payload = { question, options: opts, explanation, imageUrl }
   const content = JSON.stringify(payload)
   const iid = crypto.randomUUID()
   await db.prepare("INSERT INTO items (id, folder_id, kind, title, content_json, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?)").bind(iid, folderId, "mcq", content, now, now).run()
@@ -167,9 +183,9 @@ async function createMcqInFolder(
   const cid = crypto.randomUUID()
   await db
     .prepare(
-      "INSERT INTO cards (id, item_id, folder_id, card_kind, front, back, mcq_json, due, stability, difficulty, elapsed_days, scheduled_days, learning_steps, reps, lapses, state, last_review, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO cards (id, item_id, folder_id, card_kind, front, back, image_url, mcq_json, due, stability, difficulty, elapsed_days, scheduled_days, learning_steps, reps, lapses, state, last_review, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(cid, iid, folderId, "mcq", mcqJson, empty.due.getTime(), empty.stability, empty.difficulty, empty.elapsed_days, empty.scheduled_days, empty.learning_steps, empty.reps, empty.lapses, empty.state, empty.last_review ? empty.last_review.getTime() : null, now)
+    .bind(cid, iid, folderId, "mcq", imageUrl, mcqJson, empty.due.getTime(), empty.stability, empty.difficulty, empty.elapsed_days, empty.scheduled_days, empty.learning_steps, empty.reps, empty.lapses, empty.state, empty.last_review ? empty.last_review.getTime() : null, now)
     .run()
   return { itemId: iid, cardIds: [cid] }
 }
@@ -382,10 +398,10 @@ api.patch("/cards/:id", async (c) => {
   const id = c.req.param("id")
   const row = await c.env.DB
     .prepare(
-      "SELECT c.id, c.item_id, c.folder_id, c.card_kind, i.kind as item_kind FROM cards c JOIN items i ON i.id = c.item_id WHERE c.id = ?",
+      "SELECT c.id, c.item_id, c.folder_id, c.card_kind, c.image_url, i.kind as item_kind, i.content_json FROM cards c JOIN items i ON i.id = c.item_id WHERE c.id = ?",
     )
     .bind(id)
-    .first<{ id: string; item_id: string; folder_id: string; card_kind: string; item_kind: string }>()
+    .first<{ id: string; item_id: string; folder_id: string; card_kind: string; image_url: string | null; item_kind: string; content_json: string }>()
   if (!row) return c.json({ error: "card not found" }, 404)
 
   if (row.card_kind === "sequence" || row.item_kind === "timeline") {
@@ -395,13 +411,14 @@ api.patch("/cards/:id", async (c) => {
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
   if (!body || typeof body !== "object") return c.json({ error: "invalid json" }, 400)
   const now = Date.now()
+  const imageUrl = body.imageUrl !== undefined ? parseOptionalImageUrl(body.imageUrl) : row.image_url
 
   if (row.card_kind === "flashcard") {
     const front = String(body.front ?? "").trim()
     const back = String(body.back ?? "").trim()
     if (!front || !back) return c.json({ error: "front and back required" }, 400)
-    const content = JSON.stringify({ question: front, answer: back })
-    await c.env.DB.prepare("UPDATE cards SET front = ?, back = ? WHERE id = ?").bind(front, back, id).run()
+    const content = JSON.stringify({ question: front, answer: back, imageUrl })
+    await c.env.DB.prepare("UPDATE cards SET front = ?, back = ?, image_url = ? WHERE id = ?").bind(front, back, imageUrl, id).run()
     await c.env.DB.prepare("UPDATE items SET content_json = ?, updated_at = ? WHERE id = ?").bind(content, now, row.item_id).run()
     return c.json({ ok: true })
   }
@@ -415,10 +432,10 @@ api.patch("/cards/:id", async (c) => {
     const explanation = expl.length > 0 ? expl : null
     if (!question || !correct || wrong.length < 1) return c.json({ error: "question, correct, and at least one wrong option required" }, 400)
     const opts = [{ text: correct, correct: true }, ...wrong.map((t) => ({ text: t, correct: false }))]
-    const payload = { question, options: opts, explanation }
+    const payload = { question, options: opts, explanation, imageUrl }
     const mcqJson = JSON.stringify(payload)
     const content = JSON.stringify(payload)
-    await c.env.DB.prepare("UPDATE cards SET mcq_json = ? WHERE id = ?").bind(mcqJson, id).run()
+    await c.env.DB.prepare("UPDATE cards SET mcq_json = ?, image_url = ? WHERE id = ?").bind(mcqJson, imageUrl, id).run()
     await c.env.DB.prepare("UPDATE items SET content_json = ?, updated_at = ? WHERE id = ?").bind(content, now, row.item_id).run()
     return c.json({ ok: true })
   }
@@ -489,12 +506,12 @@ api.post("/import", async (c) => {
       if (segs.length) folderId = await ensureFolderPath(c.env.DB, segs, null, now)
     }
     if (b.type === "flashcard") {
-      const r = await createFlashcardInFolder(c.env.DB, folderId, b.question, b.answer, now)
+      const r = await createFlashcardInFolder(c.env.DB, folderId, b.question, b.answer, b.imageUrl, now)
       items++
       cards += r.cardIds.length
     } else if (b.type === "mcq") {
       const explanation = b.explanation?.trim() ? b.explanation.trim() : null
-      const r = await createMcqInFolder(c.env.DB, folderId, b.question, b.correct, b.wrong, explanation, now)
+      const r = await createMcqInFolder(c.env.DB, folderId, b.question, b.correct, b.wrong, explanation, b.imageUrl, now)
       items++
       cards += r.cardIds.length
     } else if (b.type === "timeline") {
@@ -520,8 +537,9 @@ api.post("/items/create", async (c) => {
   if (kind === "flashcard") {
     const front = String(body.front ?? "").trim()
     const back = String(body.back ?? "").trim()
+    const imageUrl = parseOptionalImageUrl(body.imageUrl)
     if (!front || !back) return c.json({ error: "front and back required" }, 400)
-    const r = await createFlashcardInFolder(c.env.DB, folderId, front, back, now)
+    const r = await createFlashcardInFolder(c.env.DB, folderId, front, back, imageUrl, now)
     return c.json({ itemId: r.itemId, cardIds: r.cardIds, cardsCreated: r.cardIds.length })
   }
   if (kind === "mcq") {
@@ -533,7 +551,8 @@ api.post("/items/create", async (c) => {
     if (wrong.length < 1) return c.json({ error: "at least one wrong option required" }, 400)
     const expl = body.explanation != null ? String(body.explanation).trim() : ""
     const explanation = expl.length > 0 ? expl : null
-    const r = await createMcqInFolder(c.env.DB, folderId, question, correct, wrong, explanation, now)
+    const imageUrl = parseOptionalImageUrl(body.imageUrl)
+    const r = await createMcqInFolder(c.env.DB, folderId, question, correct, wrong, explanation, imageUrl, now)
     return c.json({ itemId: r.itemId, cardIds: r.cardIds, cardsCreated: r.cardIds.length })
   }
   if (kind === "sequence") {
@@ -561,6 +580,7 @@ function studyCardFromRow(row: Record<string, unknown>) {
     cardKind: row.card_kind,
     front: row.front,
     back: row.back,
+    imageUrl: row.image_url,
     mcq,
     due: row.due,
     state: row.state,
