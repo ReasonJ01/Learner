@@ -1,5 +1,5 @@
 export type ImportBlock =
-  | { type: "flashcard"; folderPath: string | null; question: string; answer: string; startLine: number }
+  | { type: "flashcard"; folderPath: string | null; question: string; answer: string; imageUrl: string | null; startLine: number }
   | {
       type: "mcq"
       folderPath: string | null
@@ -7,6 +7,7 @@ export type ImportBlock =
       correct: string
       wrong: string[]
       explanation: string | null
+      imageUrl: string | null
       startLine: number
     }
   | { type: "timeline"; folderPath: string | null; title: string | null; events: string[]; startLine: number }
@@ -42,6 +43,8 @@ export function parseLearnerImport(text: string): ImportParseResult {
         const joined = body.join("\n").trim()
         const folderM = joined.match(/^\s*Folder:\s*(.+)$/im)
         if (folderM) folderPath = folderM[1].trim()
+        const imageM = joined.match(/^\s*Image:\s*(.+)$/im)
+        const imageUrl = imageM ? imageM[1].trim() : null
         const qm = joined.match(/^\s*Q:\s*(.+)$/im)
         const am = joined.match(/^\s*A:\s*(.+)$/im)
         if (!qm || !am) {
@@ -57,22 +60,34 @@ export function parseLearnerImport(text: string): ImportParseResult {
           if (/^\s*A:\s*/i.test(qMultiline[k])) ai = k
         }
         if (qi >= 0 && ai > qi + 1) {
-          question = qMultiline.slice(qi, ai).join("\n").replace(/^\s*Q:\s*/i, "").trim()
-          answer = qMultiline.slice(ai).join("\n").replace(/^\s*A:\s*/i, "").trim()
+          question = qMultiline
+            .slice(qi, ai)
+            .filter((l) => !/^\s*(Folder|Image):\s*/i.test(l))
+            .join("\n")
+            .replace(/^\s*Q:\s*/i, "")
+            .trim()
+          answer = qMultiline
+            .slice(ai)
+            .filter((l) => !/^\s*(Folder|Image):\s*/i.test(l))
+            .join("\n")
+            .replace(/^\s*A:\s*/i, "")
+            .trim()
         }
-        blocks.push({ type: "flashcard", folderPath, question, answer, startLine })
+        blocks.push({ type: "flashcard", folderPath, question, answer, imageUrl, startLine })
         continue
       }
       if (kind === "mcq") {
         const joined = body.join("\n")
         const folderM = joined.match(/^\s*Folder:\s*(.+)$/im)
         if (folderM) folderPath = folderM[1].trim()
+        const imageM = joined.match(/^\s*Image:\s*(.+)$/im)
+        const imageUrl = imageM ? imageM[1].trim() : null
         const qm = joined.match(/^\s*Q:\s*(.+)$/im)
         if (!qm) {
           errors.push({ line: startLine, message: "mcq needs Q: line" })
           continue
         }
-        const lines = body.filter((l) => !/^\s*Folder:\s*/i.test(l.trim()))
+        const lines = body.filter((l) => !/^\s*(Folder|Image):\s*/i.test(l.trim()))
         const qLineIdx = lines.findIndex((l) => /^\s*Q:\s*/i.test(l))
         let question = ""
         const opts: { correct: boolean; text: string }[] = []
@@ -117,6 +132,7 @@ export function parseLearnerImport(text: string): ImportParseResult {
           correct: correct[0].text,
           wrong: wrong.map((w) => w.text),
           explanation,
+          imageUrl,
           startLine,
         })
         continue

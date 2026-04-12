@@ -590,6 +590,9 @@ function StudyPage() {
           </div>
           {(card.cardKind === 'flashcard' || card.cardKind === 'sequence') && (
             <>
+              {card.imageUrl ? (
+                <img src={card.imageUrl} alt="Card prompt" className="max-h-64 w-full rounded-xl object-contain" loading="lazy" />
+              ) : null}
               {!flipped ? (
                 <button
                   type="button"
@@ -629,6 +632,9 @@ function StudyPage() {
           )}
           {card.cardKind === 'mcq' && card.mcq && (
             <>
+              {card.imageUrl ? (
+                <img src={card.imageUrl} alt="MCQ prompt" className="max-h-64 w-full rounded-xl object-contain" loading="lazy" />
+              ) : null}
               <p className="study-mcq-q">{card.mcq.question}</p>
               {shuffledMcq.map((opt, idx) => {
                 let cls = 'option-btn'
@@ -874,13 +880,16 @@ function FoldersPage() {
 
 const FORMAT_HELP_BODY = `Each block starts with a line like @flashcard, @mcq, or @timeline.
 Optional: Folder: path/with/slashes (match an “Available folder” below, or a new path is created)
+Optional on @flashcard/@mcq: Image: https://... (public URL)
 
 @flashcard
 Folder: Shakespeare/Sonnets
+Image: https://cdn.example.com/cards/sonnet-1.jpg
 Q: From fairest creatures we desire increase,
 A: That thereby beauty's rose might never die.
 
 @mcq
+Image: https://cdn.example.com/cards/prospero.jpg
 Q: Which play features Prospero?
 * The Tempest
 - Hamlet
@@ -911,6 +920,7 @@ function CreatePage() {
 
   const [fcFront, setFcFront] = useState('')
   const [fcBack, setFcBack] = useState('')
+  const [imageUrl, setImageUrl] = useState('')
 
   const [mcqQ, setMcqQ] = useState('')
   const [mcqCorrect, setMcqCorrect] = useState('')
@@ -944,9 +954,16 @@ function CreatePage() {
     setSubmitBtn({ phase: 'loading' })
     try {
       if (kind === 'flashcard') {
-        await createMut.mutateAsync({ kind: 'flashcard', folderId, front: fcFront, back: fcBack })
+        await createMut.mutateAsync({
+          kind: 'flashcard',
+          folderId,
+          front: fcFront,
+          back: fcBack,
+          ...(imageUrl.trim() ? { imageUrl: imageUrl.trim() } : {}),
+        })
         setFcFront('')
         setFcBack('')
+        setImageUrl('')
         setSubmitBtn({ phase: 'success', text: 'Flashcard saved ✓' })
       } else if (kind === 'mcq') {
         const wrong = mcqWrong.map((s) => s.trim()).filter(Boolean)
@@ -957,11 +974,13 @@ function CreatePage() {
           correct: mcqCorrect,
           wrong,
           ...(mcqExpl.trim() ? { explanation: mcqExpl.trim() } : {}),
+          ...(imageUrl.trim() ? { imageUrl: imageUrl.trim() } : {}),
         })
         setMcqQ('')
         setMcqCorrect('')
         setMcqWrong(['', ''])
         setMcqExpl('')
+        setImageUrl('')
         setSubmitBtn({ phase: 'success', text: 'MCQ saved ✓' })
       } else {
         const r = await createMut.mutateAsync({
@@ -1048,6 +1067,18 @@ function CreatePage() {
           {kind === 'flashcard' && (
             <>
               <div>
+                <Label htmlFor="fc-image" className="text-muted-foreground">
+                  Image URL (optional)
+                </Label>
+                <Input
+                  id="fc-image"
+                  className={cn(FIELD_INPUT_CLASS, 'mt-1.5')}
+                  value={imageUrl}
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  placeholder="https://..."
+                />
+              </div>
+              <div>
                 <Label htmlFor="fc-front" className="text-muted-foreground">
                   Front (prompt)
                 </Label>
@@ -1078,6 +1109,18 @@ function CreatePage() {
 
           {kind === 'mcq' && (
             <>
+              <div>
+                <Label htmlFor="mcq-image" className="text-muted-foreground">
+                  Image URL (optional)
+                </Label>
+                <Input
+                  id="mcq-image"
+                  className={cn(FIELD_INPUT_CLASS, 'mt-1.5')}
+                  value={imageUrl}
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  placeholder="https://..."
+                />
+              </div>
               <div>
                 <Label htmlFor="mcq-q" className="text-muted-foreground">
                   Question
