@@ -19,6 +19,7 @@ export type StudyCard = {
   cardKind: string
   front: string | null
   back: string | null
+  imageUrl: string | null
   mcq: { question: string; options: { text: string; correct: boolean }[]; explanation?: string | null } | null
   due: number
   /** FSRS: 0 New, 1 Learning, 2 Review, 3 Relearning */
@@ -36,8 +37,8 @@ export type ImportResult =
   | { ok: true; status: number; created: { items: number; cards: number }; errors: { line: number; message: string }[] }
 
 export type CreateItemBody =
-  | { kind: 'flashcard'; folderId: string; front: string; back: string }
-  | { kind: 'mcq'; folderId: string; question: string; correct: string; wrong: string[]; explanation?: string }
+  | { kind: 'flashcard'; folderId: string; front: string; back: string; imageUrl?: string }
+  | { kind: 'mcq'; folderId: string; question: string; correct: string; wrong: string[]; explanation?: string; imageUrl?: string }
   | { kind: 'sequence'; folderId: string; title: string; eventsText: string }
 
 export type ManageCard = {
@@ -48,6 +49,7 @@ export type ManageCard = {
   itemKind: string
   front: string | null
   back: string | null
+  imageUrl: string | null
   mcq: StudyCard['mcq']
   due: number
   state: number
@@ -72,6 +74,7 @@ function mapManageCardRow(r: Record<string, unknown>): ManageCard {
     itemKind: String(r.item_kind),
     front: r.front != null ? String(r.front) : null,
     back: r.back != null ? String(r.back) : null,
+    imageUrl: r.image_url != null ? String(r.image_url) : null,
     mcq,
     due: Number(r.due),
     state: Number(r.state),
@@ -87,7 +90,16 @@ export async function importContent(text: string, defaultFolderId?: string): Pro
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, defaultFolderId }),
     })
-    const data = (await r.json()) as Partial<ImportResponseBody> & { error?: string }
+    const ct = r.headers.get('content-type') ?? ''
+    const data: (Partial<ImportResponseBody> & { error?: string }) | null = ct.includes('application/json')
+      ? ((await r.json()) as Partial<ImportResponseBody> & { error?: string })
+      : null
+    if (!data && !r.ok) {
+      const bodyText = await r.text().catch(() => '')
+      const fallback = bodyText.trim().slice(0, 240)
+      return { ok: false, message: `HTTP ${r.status}${fallback ? `: ${fallback}` : ''}` }
+    }
+    if (!data) return { ok: false, message: `HTTP ${r.status}: Unexpected non-JSON response` }
     const created = data.created ?? { items: 0, cards: 0 }
     const errors = data.errors ?? []
     return { ok: true, status: r.status, created, errors }
@@ -179,8 +191,8 @@ export const api = {
   patchCard: (
     cardId: string,
     body:
-      | { front: string; back: string }
-      | { question: string; correct: string; wrong: string[]; explanation?: string },
+      | { front: string; back: string; imageUrl?: string }
+      | { question: string; correct: string; wrong: string[]; explanation?: string; imageUrl?: string },
   ) => req<{ ok: boolean }>(`/api/cards/${encodeURIComponent(cardId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   patchTimelineItem: (itemId: string, body: { title: string; eventsText: string }) =>
     req<{ ok: boolean }>(`/api/items/${encodeURIComponent(itemId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
